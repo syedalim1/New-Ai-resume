@@ -10,6 +10,16 @@
 
 import { ai } from "@/ai/genkit";
 import { z } from "genkit";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+// Default Gemini API key - hardcoded to ensure it's available in server components
+const API_KEY = "AIzaSyAXP4kBBXRl6vgqsVYGXm9XNzAozjZnnt8";
+
+// Initialize the Google Generative AI model directly
+const genAI = new GoogleGenerativeAI(API_KEY);
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.5-flash-preview-04-17",
+});
 
 const ExtractSkillsExperienceInputSchema = z.object({
   resumeDataUri: z

@@ -5,28 +5,28 @@ import type { CandidateJobMatchOutput } from "@/ai/flows/candidate-job-match";
 import { candidateJobMatch } from "@/ai/flows/candidate-job-match";
 import { extractSkillsExperience } from "@/ai/flows/extract-skills-experience";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import {
-  Loader2,
-  Briefcase,
-  AlertCircle,
-  UploadCloud,
-  FileText,
-} from "lucide-react";
-import ResultCard from "./result-card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+
+// Import custom components
+import JobDetailsForm from "./job-details-form";
+import ResumeUploader from "./resume-uploader";
+import FilterControls from "./filter-controls";
+import ResultsHeader from "./results-header";
+import ResultsCardView from "./results-card-view";
+import BatchActions from "./batch-actions";
+import { RejectionDialog, NotesDialog } from "./resume-dialogs";
 
 export interface AnalysisResult extends CandidateJobMatchOutput {
   candidateName: string;
   id: string;
+  rejected?: boolean;
+  rejectionReason?: string;
+  favorite?: boolean;
+  detailedNotes?: string;
+  reviewDate?: string;
+  status: "pending" | "reviewed" | "rejected" | "shortlisted";
 }
 
 const fileToDataUri = (file: File): Promise<string> => {
@@ -49,6 +49,21 @@ export default function HireViewDashboard() {
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
   const [mounted, setMounted] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("all");
+  const [filterMinScore, setFilterMinScore] = useState<number>(0);
+  const [showRejected, setShowRejected] = useState<boolean>(false);
+  const [sortBy, setSortBy] = useState<string>("score");
+  const [selectedResult, setSelectedResult] = useState<AnalysisResult | null>(
+    null
+  );
+  const [rejectionDialogOpen, setRejectionDialogOpen] =
+    useState<boolean>(false);
+  const [rejectionReason, setRejectionReason] = useState<string>("");
+  const [detailedNotesDialogOpen, setDetailedNotesDialogOpen] =
+    useState<boolean>(false);
+  const [detailedNotes, setDetailedNotes] = useState<string>("");
+  const [viewMode, setViewMode] = useState<"card" | "compare">("card");
+  const [compareItems, setCompareItems] = useState<string[]>([]);
 
   useEffect(() => {
     setMounted(true);
@@ -61,9 +76,19 @@ export default function HireViewDashboard() {
       const storedJobDescription = localStorage.getItem(
         "hireview-jobDescription"
       );
+      const storedResults = localStorage.getItem("hireview-results");
 
       setJobTitle(storedJobTitle || defaultJobTitle);
       setJobDescription(storedJobDescription || defaultJobDescription);
+
+      if (storedResults) {
+        try {
+          const parsedResults = JSON.parse(storedResults);
+          setAnalysisResults(parsedResults);
+        } catch (e) {
+          console.error("Failed to parse stored results:", e);
+        }
+      }
     } else {
       setJobTitle(defaultJobTitle);
       setJobDescription(defaultJobDescription);
@@ -82,23 +107,15 @@ export default function HireViewDashboard() {
     }
   }, [jobDescription, mounted]);
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-      const files = Array.from(event.target.files);
-      const pdfFiles = files.filter((file) => file.type === "application/pdf");
-      if (pdfFiles.length !== files.length) {
-        toast({
-          title: "Invalid File Type",
-          description:
-            "Only PDF files are accepted. Non-PDF files have been filtered out.",
-          variant: "destructive",
-        });
-      }
-      setSelectedFiles(pdfFiles);
-    } else {
-      setSelectedFiles([]);
+  useEffect(() => {
+    if (
+      mounted &&
+      typeof window !== "undefined" &&
+      analysisResults.length > 0
+    ) {
+      localStorage.setItem("hireview-results", JSON.stringify(analysisResults));
     }
-  };
+  }, [analysisResults, mounted]);
 
   const handleAnalyze = async () => {
     if (!jobTitle.trim()) {
@@ -131,7 +148,7 @@ export default function HireViewDashboard() {
 
     setIsLoading(true);
     setError(null);
-    setAnalysisResults([]);
+    // We don't clear existing results, we append new ones
 
     const fullJobDescription = `Job Title: ${jobTitle}\n\nJob Description:\n${jobDescription}`;
     const results: AnalysisResult[] = [];
@@ -182,6 +199,7 @@ export default function HireViewDashboard() {
             insights: `Error processing resume: ${specificMessage}`,
             missingSkills: [],
             topSkills: [],
+            status: "pending",
           });
           toast({
             title: `Error processing ${candidateName}`,
@@ -195,11 +213,39 @@ export default function HireViewDashboard() {
           resumeText: resumeText,
           jobDescription: fullJobDescription,
         });
-        results.push({ ...matchOutput, candidateName, id: resumeId });
+
+        // Set status based on match score
+        let initialStatus = "pending";
+        if (matchOutput.matchScore >= 75) {
+          initialStatus = "shortlisted";
+        }
+
+        results.push({
+          ...matchOutput,
+          candidateName,
+          id: resumeId,
+          status: initialStatus as
+            | "pending"
+            | "reviewed"
+            | "rejected"
+            | "shortlisted",
+          reviewDate: new Date().toISOString(),
+        });
       }
 
+      // Sort results and append to existing results
       results.sort((a, b) => b.matchScore - a.matchScore);
-      setAnalysisResults(results);
+
+      // Deduplicate by file name before adding
+      const newResults = [...analysisResults];
+      for (const result of results) {
+        if (!newResults.some((r) => r.candidateName === result.candidateName)) {
+          newResults.push(result);
+        }
+      }
+
+      setAnalysisResults(newResults);
+      setSelectedFiles([]); // Clear selected files after analysis
       toast({
         title: "Analysis Complete",
         description: `Successfully analyzed ${results.length} resume(s).`,
@@ -222,6 +268,146 @@ export default function HireViewDashboard() {
     }
   };
 
+  const handleRejectResume = (result: AnalysisResult) => {
+    setSelectedResult(result);
+    setRejectionReason("");
+    setRejectionDialogOpen(true);
+  };
+
+  const confirmRejection = () => {
+    if (!selectedResult) return;
+
+    setAnalysisResults((prev) =>
+      prev.map((item) =>
+        item.id === selectedResult.id
+          ? {
+              ...item,
+              rejected: true,
+              rejectionReason: rejectionReason || "Not a good fit for the role",
+              status: "rejected",
+            }
+          : item
+      )
+    );
+
+    setRejectionDialogOpen(false);
+    toast({
+      title: "Resume Rejected",
+      description: `${selectedResult.candidateName} has been moved to rejected resumes.`,
+      variant: "default",
+    });
+  };
+
+  const handleAddNotes = (result: AnalysisResult) => {
+    setSelectedResult(result);
+    setDetailedNotes(result.detailedNotes || "");
+    setDetailedNotesDialogOpen(true);
+  };
+
+  const saveDetailedNotes = () => {
+    if (!selectedResult) return;
+
+    setAnalysisResults((prev) =>
+      prev.map((item) =>
+        item.id === selectedResult.id
+          ? {
+              ...item,
+              detailedNotes: detailedNotes,
+              status: "reviewed",
+            }
+          : item
+      )
+    );
+
+    setDetailedNotesDialogOpen(false);
+    toast({
+      title: "Notes Saved",
+      description: `Detailed notes added for ${selectedResult.candidateName}.`,
+      variant: "default",
+    });
+  };
+
+  const handleToggleFavorite = (result: AnalysisResult) => {
+    setAnalysisResults((prev) =>
+      prev.map((item) =>
+        item.id === result.id
+          ? {
+              ...item,
+              favorite: !item.favorite,
+              status: !item.favorite
+                ? "shortlisted"
+                : item.rejected
+                ? "rejected"
+                : "pending",
+            }
+          : item
+      )
+    );
+  };
+
+  const handleToggleCompare = (id: string) => {
+    setCompareItems((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id].slice(-2)
+    );
+  };
+
+  const clearAllResults = () => {
+    if (
+      confirm(
+        "Are you sure you want to clear all results? This action cannot be undone."
+      )
+    ) {
+      setAnalysisResults([]);
+      localStorage.removeItem("hireview-results");
+      setCompareItems([]);
+      toast({
+        title: "Results Cleared",
+        description: "All resume analysis results have been cleared.",
+        variant: "default",
+      });
+    }
+  };
+
+  const exportResults = () => {
+    const data = JSON.stringify(analysisResults, null, 2);
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.download = `resume-analysis-${
+      new Date().toISOString().split("T")[0]
+    }.json`;
+    link.href = url;
+    link.click();
+  };
+
+  const filteredResults = analysisResults.filter((result) => {
+    // Filter by score
+    if (result.matchScore < filterMinScore) return false;
+
+    // Filter rejected status if showRejected is false
+    if (!showRejected && result.status === "rejected") return false;
+
+    return true;
+  });
+
+  // Sort results
+  const sortedResults = [...filteredResults].sort((a, b) => {
+    if (sortBy === "name")
+      return a.candidateName.localeCompare(b.candidateName);
+    if (sortBy === "date") {
+      const dateA = a.reviewDate || "";
+      const dateB = b.reviewDate || "";
+      return dateB.localeCompare(dateA); // newest first
+    }
+    // Default: sort by score
+    return b.matchScore - a.matchScore;
+  });
+
+  // Results for comparison view
+  const compareResults = sortedResults.filter((r) =>
+    compareItems.includes(r.id)
+  );
+
   if (!mounted) {
     return (
       <div className="flex justify-center items-center h-screen">
@@ -230,105 +416,33 @@ export default function HireViewDashboard() {
     );
   }
 
+  // BatchActions Button for FilterControls
+  const batchActionsButton =
+    sortedResults.length > 0 && compareItems.length > 0 ? (
+      <BatchActions
+        selectedItems={compareItems}
+        setRejectionReason={setRejectionReason}
+        setResults={setAnalysisResults}
+        clearSelection={() => setCompareItems([])}
+      />
+    ) : null;
+
   return (
     <div className="space-y-8">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-        <Card className="shadow-lg">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-xl">
-              <Briefcase className="h-6 w-6 text-primary" />
-              Job Details
-            </CardTitle>
-            <CardDescription>
-              Enter the job title and description.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label
-                htmlFor="jobTitle"
-                className="block text-sm font-medium text-foreground mb-1"
-              >
-                Job Title
-              </label>
-              <Input
-                id="jobTitle"
-                placeholder="Enter job title..."
-                value={jobTitle}
-                onChange={(e) => setJobTitle(e.target.value)}
-                className="text-sm"
-                disabled={isLoading}
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="jobDescription"
-                className="block text-sm font-medium text-foreground mb-1"
-              >
-                Job Description
-              </label>
-              <Textarea
-                id="jobDescription"
-                placeholder="Paste job description here..."
-                value={jobDescription}
-                onChange={(e) => setJobDescription(e.target.value)}
-                rows={8}
-                className="text-sm resize-none"
-                disabled={isLoading}
-              />
-            </div>
-          </CardContent>
-        </Card>
+        <JobDetailsForm
+          jobTitle={jobTitle}
+          jobDescription={jobDescription}
+          isLoading={isLoading}
+          setJobTitle={setJobTitle}
+          setJobDescription={setJobDescription}
+        />
 
-        <Card className="shadow-xl border border-border max-w-2xl mx-auto">
-          <CardHeader className="bg-muted p-6 rounded-t-md">
-            <CardTitle className="flex items-center gap-3 text-2xl font-semibold text-primary">
-              <UploadCloud className="h-7 w-7" />
-              Upload Resumes
-            </CardTitle>
-            <CardDescription className="text-muted-foreground mt-1">
-              Select one or more PDF files to analyze.
-            </CardDescription>
-          </CardHeader>
-
-          <CardContent className="space-y-6 p-6">
-            <label
-              htmlFor="resumeFiles"
-              className="block w-full cursor-pointer border border-dashed border-primary/50 rounded-md p-6 text-center hover:bg-primary/5 transition-colors"
-            >
-              <Input
-                id="resumeFiles"
-                type="file"
-                accept=".pdf"
-                multiple
-                onChange={handleFileChange}
-                className="hidden"
-                disabled={isLoading}
-              />
-              <div className="flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-                <UploadCloud className="h-10 w-10 text-primary" />
-                <span>Click or drag files to upload</span>
-              </div>
-            </label>
-
-            {selectedFiles.length > 0 && (
-              <div>
-                <h4 className="font-medium text-sm mb-2">Selected Files:</h4>
-                <ul className="bg-muted/40 p-3 rounded-md max-h-40 overflow-y-auto border border-muted shadow-inner text-sm text-muted-foreground space-y-2">
-                  {selectedFiles.map((file) => (
-                    <li key={file.name} className="flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-primary" />
-                      <span className="truncate">{file.name}</span>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        ({(file.size / 1024).toFixed(2)} KB)
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        <ResumeUploader
+          selectedFiles={selectedFiles}
+          setSelectedFiles={setSelectedFiles}
+          isLoading={isLoading}
+        />
       </div>
 
       <div className="text-center">
@@ -362,22 +476,54 @@ export default function HireViewDashboard() {
       )}
 
       {analysisResults.length > 0 && (
-        <section className="space-y-6">
-          <h2 className="text-2xl font-semibold text-center text-foreground">
-            Analysis Results
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {analysisResults.map((result) => (
-              <ResultCard key={result.id} result={result} />
-            ))}
-          </div>
-        </section>
+        <>
+          <ResultsHeader
+            resultsCount={analysisResults.length}
+            onExport={exportResults}
+            onClear={clearAllResults}
+          />
+
+          <FilterControls
+            filterMinScore={filterMinScore}
+            setFilterMinScore={setFilterMinScore}
+            showRejected={showRejected}
+            setShowRejected={setShowRejected}
+            batchActionsButton={batchActionsButton}
+          />
+
+          <ResultsCardView
+            results={sortedResults}
+            compareItems={compareItems}
+            handleToggleCompare={handleToggleCompare}
+            handleToggleFavorite={handleToggleFavorite}
+            handleAddNotes={handleAddNotes}
+            handleRejectResume={handleRejectResume}
+          />
+        </>
       )}
+
+      {/* Dialogs */}
+      <RejectionDialog
+        open={rejectionDialogOpen}
+        setOpen={setRejectionDialogOpen}
+        selectedResult={selectedResult}
+        rejectionReason={rejectionReason}
+        setRejectionReason={setRejectionReason}
+        onConfirm={confirmRejection}
+      />
+
+      <NotesDialog
+        open={detailedNotesDialogOpen}
+        setOpen={setDetailedNotesDialogOpen}
+        selectedResult={selectedResult}
+        detailedNotes={detailedNotes}
+        setDetailedNotes={setDetailedNotes}
+        onSave={saveDetailedNotes}
+      />
     </div>
   );
 }
 
-// Keep SparkleIcon as it's used in the button
 function SparkleIcon(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
@@ -392,12 +538,7 @@ function SparkleIcon(props: React.SVGProps<SVGSVGElement>) {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M9.93 13.5A2.5 2.5 0 0 0 12 16a2.5 2.5 0 0 0 2.07-2.5A2.5 2.5 0 0 0 12 11a2.5 2.5 0 0 0-2.07 2.5Z" />
-      <path d="M12 3v2" />
-      <path d="M21 12h-2" />
-      <path d="M12 21v-2" />
-      <path d="M3 12H1" />
-      <path d="m18.36 5.64-.9.9M5.64 18.36-.9.9M18.36 18.36l-1.41-1.41M6.54 5.64l.9.9" />
+      <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z" />
     </svg>
   );
 }

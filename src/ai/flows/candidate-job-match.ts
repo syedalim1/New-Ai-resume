@@ -11,6 +11,16 @@
 
 import { ai } from "@/ai/genkit";
 import { z } from "genkit";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+// Default Gemini API key - hardcoded to ensure it's available in server components
+const API_KEY = "AIzaSyAXP4kBBXRl6vgqsVYGXm9XNzAozjZnnt8";
+
+// Initialize the Google Generative AI model directly
+const genAI = new GoogleGenerativeAI(API_KEY);
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.5-flash-preview-04-17",
+});
 
 const CandidateJobMatchInputSchema = z.object({
   resumeText: z.string().describe("The text content of the resume."),
@@ -34,7 +44,45 @@ const CandidateJobMatchOutputSchema = z.object({
     .describe("A list of skills missing from the candidate."),
   topSkills: z
     .array(z.string())
-    .describe("A list of the candidate top skills."),
+    .describe("A list of the candidate's top skills."),
+  experienceLevel: z
+    .string()
+    .optional()
+    .describe(
+      "The candidate's experience level (e.g., 'Entry', 'Mid', 'Senior')."
+    ),
+  educationMatch: z
+    .number()
+    .optional()
+    .describe(
+      "A score (0-100) indicating how well the candidate's education matches the job requirements."
+    ),
+  experienceMatch: z
+    .number()
+    .optional()
+    .describe(
+      "A score (0-100) indicating how well the candidate's experience matches the job requirements."
+    ),
+  skillsMatch: z
+    .number()
+    .optional()
+    .describe(
+      "A score (0-100) indicating how well the candidate's skills match the job requirements."
+    ),
+  keyStrengths: z
+    .array(z.string())
+    .optional()
+    .describe("A list of the candidate's key strengths related to the job."),
+  developmentAreas: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "A list of areas where the candidate could improve to better match the job."
+    ),
+  recommendedQuestions: z
+    .array(z.string())
+    .optional()
+    .describe("A list of recommended interview questions for this candidate."),
 });
 export type CandidateJobMatchOutput = z.infer<
   typeof CandidateJobMatchOutputSchema
@@ -50,20 +98,37 @@ const prompt = ai.definePrompt({
   name: "candidateJobMatchPrompt",
   input: { schema: CandidateJobMatchInputSchema },
   output: { schema: CandidateJobMatchOutputSchema },
-  prompt: `You are an AI-powered HR assistant. Your task is to evaluate how well a candidate's resume matches a given job description and provide a match score, insights, and identify missing skills.
+  prompt: `You are an AI-powered HR assistant and talent evaluator. Your task is to comprehensively evaluate how well a candidate's resume matches a given job description and provide detailed analysis.
 
 Resume Text: {{{resumeText}}}
 
 Job Description: {{{jobDescription}}}
 
-Based on the resume and job description, provide the following:
+Based on the resume and job description, provide a detailed evaluation with the following:
 
-1.  **Match Score:** A numerical score (0-100) representing the overall fit of the candidate for the job.
-2.  **Insights:** A concise paragraph summarizing the candidate's strengths and weaknesses in relation to the job requirements.
-3.  **Missing Skills:** A bulleted list of essential skills mentioned in the job description that are not evident in the resume.
-4.  **Top Skills:**  A bulleted list of the candidate's key skills.
+1. **Match Score:** A numerical score (0-100) representing the overall fit of the candidate for the job.
 
-Please ensure the output is well-structured and easy to understand for HR professionals.`,
+2. **Experience Level:** Identify the candidate's experience level based on the resume (Entry, Mid, Senior, Executive, etc.)
+
+3. **Insights:** A concise paragraph summarizing the candidate's strengths and weaknesses in relation to the job requirements. Focus on what makes them a good fit or where they fall short.
+
+4. **Top Skills:** A list of the candidate's 5-10 strongest skills relevant to the job requirements.
+
+5. **Missing Skills:** A list of essential skills mentioned in the job description that are not evident in the resume.
+
+6. **Education Match:** A numerical score (0-100) for how well the candidate's education meets the job requirements.
+
+7. **Experience Match:** A numerical score (0-100) for how well the candidate's work experience aligns with the job.
+
+8. **Skills Match:** A numerical score (0-100) for how well the candidate's skill set matches the job requirements.
+
+9. **Key Strengths:** 3-5 specific strengths this candidate brings that are highly relevant to this role.
+
+10. **Development Areas:** 2-3 areas where the candidate could improve to better match the job requirements.
+
+11. **Recommended Questions:** 2-4 tailored interview questions to ask this candidate based on their resume and the job match.
+
+Please ensure the output is well-structured and objective for HR professionals to make informed decisions.`,
 });
 
 const candidateJobMatchFlow = ai.defineFlow(

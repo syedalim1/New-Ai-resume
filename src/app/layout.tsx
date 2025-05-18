@@ -4,6 +4,7 @@ import "./globals.css";
 
 import Header from "../components/layout/header";
 import { Toaster } from "@/components/ui/toaster";
+import { ApiProvider } from "@/ai/client-api-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,11 +31,13 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased flex flex-col min-h-screen`}
       >
-        <Header />
-        <main className="flex-grow container mx-auto px-4 py-8">
-          {children}
-        </main>
-        <Toaster />
+        <ApiProvider>
+          <Header />
+          <main className="flex-grow container mx-auto px-4 py-8">
+            {children}
+          </main>
+          <Toaster />
+        </ApiProvider>
       </body>
     </html>
   );
